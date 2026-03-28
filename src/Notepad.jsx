@@ -80,77 +80,201 @@ const EditorLoadingState = () => (
 );
 
 // File Chip Component
-const FileChip = ({ file, onDelete, disabled }) => (
-  <div style={{
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '8px 12px',
-    backgroundColor: 'rgba(88, 166, 255, 0.1)',
-    border: '1px solid rgba(88, 166, 255, 0.3)',
-    borderRadius: '20px',
-    fontSize: '0.85rem',
-    color: '#79c0ff',
-    whiteSpace: 'nowrap',
-    position: 'relative',
-    transition: 'all 0.2s ease',
-    marginRight: '8px',
-    marginBottom: '8px'
-  }}
-  onMouseEnter={(e) => {
-    e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.2)';
-    e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.6)';
-  }}
-  onMouseLeave={(e) => {
-    e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.1)';
-    e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.3)';
-  }}
-  >
-    <span style={{ fontSize: '1.1rem' }}>📄</span>
-    <a 
-      href={file.url} 
-      download={file.name}
-      style={{
-        color: '#79c0ff',
-        textDecoration: 'none',
-        maxWidth: '150px',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        cursor: 'pointer'
-      }}
-      title={file.name}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') window.open(file.url);
-      }}
-    >
-      {file.name}
-    </a>
-    <button
-      onClick={() => onDelete(file.name, file.url)}
-      disabled={disabled}
-      style={{
-        background: 'none',
-        border: 'none',
-        color: '#f85149',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        fontSize: '1rem',
-        padding: '0 4px',
-        display: 'flex',
+const FileChip = ({ file, onDelete, disabled, isDeleting }) => {
+  const [showConfirm, setShowConfirm] = React.useState(false);
+  
+  // Calculate time remaining for expiry
+  const getExpiryText = () => {
+    const now = Date.now();
+    const expiresAt = file.expiresAt || (file.uploadedAt + 30 * 24 * 60 * 60 * 1000);
+    const timeLeft = expiresAt - now;
+    
+    if (timeLeft < 0) return "expired";
+    if (timeLeft < 24 * 60 * 60 * 1000) { // Less than 1 day
+      const hours = Math.floor(timeLeft / (60 * 60 * 1000));
+      return `${hours}h left`;
+    }
+    const days = Math.floor(timeLeft / (24 * 60 * 60 * 1000));
+    return `${days}d left`;
+  };
+
+  const handleDeleteClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (isDeleting) return; // Prevent double-click during deletion
+    
+    setShowConfirm(true);
+  };
+
+  const handleConfirm = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowConfirm(false);
+    onDelete(file.name, file.url);
+  };
+
+  const handleCancel = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowConfirm(false);
+  };
+
+  if (showConfirm) {
+    return (
+      <div style={{
+        display: 'inline-flex',
         alignItems: 'center',
-        opacity: disabled ? 0.5 : 0.7,
-        transition: 'opacity 0.2s',
-      }}
-      onMouseEnter={(e) => { e.target.style.opacity = '1'; }}
-      onMouseLeave={(e) => { e.target.style.opacity = '0.7'; }}
-      title="Delete file"
-      aria-label={`Delete ${file.name}`}
+        gap: '4px',
+        padding: '8px 10px',
+        backgroundColor: 'rgba(248, 81, 73, 0.15)',
+        border: '2px solid rgba(248, 81, 73, 0.5)',
+        borderRadius: '20px',
+        fontSize: '0.75rem',
+        color: '#f85149',
+        whiteSpace: 'nowrap',
+        animation: 'pulse 0.5s ease',
+        marginRight: '8px',
+        marginBottom: '8px',
+        fontWeight: 600
+      }}>
+        <span>Delete?</span>
+        <button
+          onClick={handleConfirm}
+          style={{
+            background: 'rgba(248, 81, 73, 0.2)',
+            border: 'none',
+            borderRadius: '3px',
+            color: '#f85149',
+            cursor: 'pointer',
+            padding: '2px 6px',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            transition: 'background 0.2s'
+          }}
+          onMouseEnter={(e) => e.target.style.background = 'rgba(248, 81, 73, 0.4)'}
+          onMouseLeave={(e) => e.target.style.background = 'rgba(248, 81, 73, 0.2)'}
+        >
+          Yes
+        </button>
+        <button
+          onClick={handleCancel}
+          style={{
+            background: 'rgba(88, 166, 255, 0.2)',
+            border: 'none',
+            borderRadius: '3px',
+            color: '#79c0ff',
+            cursor: 'pointer',
+            padding: '2px 6px',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            transition: 'background 0.2s'
+          }}
+          onMouseEnter={(e) => e.target.style.background = 'rgba(88, 166, 255, 0.4)'}
+          onMouseLeave={(e) => e.target.style.background = 'rgba(88, 166, 255, 0.2)'}
+        >
+          No
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '8px 12px',
+      backgroundColor: isDeleting ? 'rgba(88, 166, 255, 0)' : 'rgba(88, 166, 255, 0.1)',
+      border: `1px solid ${isDeleting ? 'rgba(88, 166, 255, 0.1)' : 'rgba(88, 166, 255, 0.3)'}`,
+      borderRadius: '20px',
+      fontSize: '0.85rem',
+      color: '#79c0ff',
+      whiteSpace: 'nowrap',
+      position: 'relative',
+      transition: 'all 0.2s ease',
+      marginRight: '8px',
+      marginBottom: '8px',
+      opacity: isDeleting ? 0.4 : 1,
+      transform: isDeleting ? 'scale(0.95)' : 'scale(1)',
+      pointerEvents: isDeleting ? 'none' : 'auto'
+    }}
+    onMouseEnter={(e) => {
+      if (!isDeleting) {
+        e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.2)';
+        e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.6)';
+      }
+    }}
+    onMouseLeave={(e) => {
+      if (!isDeleting) {
+        e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.1)';
+        e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.3)';
+      }
+    }}
     >
-      ✕
-    </button>
-  </div>
-);
+      <span style={{ fontSize: '1.1rem' }}>📄</span>
+      <a 
+        href={file.url} 
+        download={file.name}
+        style={{
+          color: '#79c0ff',
+          textDecoration: 'none',
+          maxWidth: '120px',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          cursor: isDeleting ? 'default' : 'pointer',
+          pointerEvents: isDeleting ? 'none' : 'auto'
+        }}
+        title={file.name}
+        role="button"
+        tabIndex={isDeleting ? -1 : 0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !isDeleting) window.open(file.url);
+        }}
+      >
+        {file.name}
+      </a>
+      
+      {/* File Expiry Timer */}
+      <span style={{
+        fontSize: '0.7rem',
+        color: '#6e7681',
+        paddingLeft: '4px',
+        borderLeft: '1px solid rgba(88, 166, 255, 0.2)'
+      }}>
+        {getExpiryText()}
+      </span>
+
+      <button
+        onClick={handleDeleteClick}
+        disabled={disabled || isDeleting}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: '#f85149',
+          cursor: disabled || isDeleting ? 'not-allowed' : 'pointer',
+          fontSize: '1rem',
+          padding: '0 4px',
+          display: 'flex',
+          alignItems: 'center',
+          opacity: disabled || isDeleting ? 0.5 : 0.7,
+          transition: 'opacity 0.2s',
+          marginLeft: '2px'
+        }}
+        onMouseEnter={(e) => { 
+          if (!disabled && !isDeleting) e.target.style.opacity = '1'; 
+        }}
+        onMouseLeave={(e) => { 
+          if (!disabled && !isDeleting) e.target.style.opacity = '0.7'; 
+        }}
+        title={isDeleting ? "Deleting..." : "Delete file"}
+        aria-label={`Delete ${file.name}`}
+      >
+        {isDeleting ? '⏳' : '✕'}
+      </button>
+    </div>
+  );
+};
 
 function NotepadComponent() {
   const navigate = useNavigate();
@@ -173,6 +297,9 @@ function NotepadComponent() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [codeCopyStatus, setCodeCopyStatus] = useState("📋");
+  const [deletingFile, setDeletingFile] = useState(null);
+  const [deletionError, setDeletionError] = useState(null);
+  const pendingDeletionRef = useRef(null);
 
   const textRef = useRef("");
   const isFocusedRef = useRef(false);
@@ -207,6 +334,7 @@ function NotepadComponent() {
     return () => {
       if (copyStatusTimeoutRef.current) clearTimeout(copyStatusTimeoutRef.current);
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+      if (codeCopyTimeoutRef.current) clearTimeout(codeCopyTimeoutRef.current);
     };
   }, []);
 
@@ -565,7 +693,8 @@ function NotepadComponent() {
           url: downloadURL,
           type: file.type,
           size: file.size,
-          uploadedAt: Date.now()
+          uploadedAt: Date.now(),
+          expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000) // 30-day TTL for future monetization
         });
       }
 
@@ -586,28 +715,47 @@ function NotepadComponent() {
     }
   }, [id, attachments, database]);
 
-  // Handle file deletion
-  const handleDeleteFile = useCallback(async (fileName, url) => {
-    if (!id || !window.confirm(`Delete "${fileName}"?`)) return;
+  // Handle file deletion with OPTIMISTIC UI
+  const handleDeleteFile = useCallback(async (fileName, fileUrl) => {
+    if (!id) return;
 
-    setUploading(true);
+    // OPTIMISTIC UPDATE: Remove from UI immediately
+    const previousAttachments = attachments;
+    const optimisticAttachments = attachments.filter(a => a.name !== fileName);
+    setAttachments(optimisticAttachments);
+    setDeletingFile(fileName);
+    setDeletionError(null);
+
     const storage = getStorage();
+    let deleteSuccess = false;
 
     try {
-      // Delete from Storage
-      const fileRef = storageRef(storage, `files/${id}/${fileName}`);
-      await deleteObject(fileRef);
+      // Delete from Storage (can fail silently - file might already be gone)
+      try {
+        const fileRef = storageRef(storage, `files/${id}/${fileName}`);
+        await deleteObject(fileRef);
+      } catch (storageError) {
+        console.warn("Storage delete warning:", storageError.code);
+        // Continue anyway - file may have already been deleted
+      }
 
       // Delete from Database
-      const updatedAttachments = attachments.filter(a => a.name !== fileName);
-      await set(ref(database, `notes/${id}/attachments`), updatedAttachments.length > 0 ? updatedAttachments : null);
+      await set(ref(database, `notes/${id}/attachments`), optimisticAttachments.length > 0 ? optimisticAttachments : null);
       
-      setAttachments(updatedAttachments);
+      pendingDeletionRef.current = { fileName, success: true };
+      deleteSuccess = true;
     } catch (error) {
-      console.error("Delete failed", error);
-      alert("Delete failed: " + error.message);
+      console.error("Database delete failed", error);
+      
+      // ROLLBACK: Restore from previous state on error
+      setAttachments(previousAttachments);
+      setDeletionError(`Failed to delete "${fileName}". Please try again.`);
+      pendingDeletionRef.current = { fileName, success: false };
+
+      // Auto-clear error after 5 seconds
+      setTimeout(() => setDeletionError(null), 5000);
     } finally {
-      setUploading(false);
+      setDeletingFile(null);
     }
   }, [id, attachments, database]);
 
@@ -950,6 +1098,7 @@ function NotepadComponent() {
                   file={file} 
                   onDelete={handleDeleteFile}
                   disabled={uploading}
+                  isDeleting={deletingFile === file.name}
                 />
               ))}
             </div>
@@ -961,6 +1110,11 @@ function NotepadComponent() {
           <div style={{ marginTop: '10px', padding: '12px 16px', backgroundColor: 'rgba(248, 81, 73, 0.1)', border: '1px solid rgba(248, 81, 73, 0.3)', color: '#f85149', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', animation: 'slideIn 0.3s ease-out', backdropFilter: 'blur(8px)' }}>
             ⚠️ {syncError}
             {retryCount > 0 && <span style={{ marginLeft: 'auto', fontSize: '0.8rem', opacity: 0.8, fontWeight: 500 }}>Retry {retryCount}/3</span>}
+          </div>
+        )}
+        {deletionError && (
+          <div style={{ marginTop: '10px', padding: '12px 16px', backgroundColor: 'rgba(248, 81, 73, 0.1)', border: '1px solid rgba(248, 81, 73, 0.3)', color: '#f85149', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', animation: 'slideIn 0.3s ease-out', backdropFilter: 'blur(8px)' }}>
+            🗑️ {deletionError}
           </div>
         )}
         {hasPendingRemote && !isSyncing && (
