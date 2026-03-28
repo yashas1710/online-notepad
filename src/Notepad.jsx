@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 const Editor = React.lazy(() => import("@monaco-editor/react"));
 import { database, ref, set, onValue, onDisconnect } from "./firebase";
+import { getStorage, ref as storageRef, uploadBytes, deleteObject, getDownloadURL } from "firebase/storage";
 
 // Error Boundary Component
 class ErrorBoundary extends React.Component {
@@ -78,6 +79,79 @@ const EditorLoadingState = () => (
   </div>
 );
 
+// File Chip Component
+const FileChip = ({ file, onDelete, disabled }) => (
+  <div style={{
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 12px',
+    backgroundColor: 'rgba(88, 166, 255, 0.1)',
+    border: '1px solid rgba(88, 166, 255, 0.3)',
+    borderRadius: '20px',
+    fontSize: '0.85rem',
+    color: '#79c0ff',
+    whiteSpace: 'nowrap',
+    position: 'relative',
+    transition: 'all 0.2s ease',
+    marginRight: '8px',
+    marginBottom: '8px'
+  }}
+  onMouseEnter={(e) => {
+    e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.2)';
+    e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.6)';
+  }}
+  onMouseLeave={(e) => {
+    e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.1)';
+    e.currentTarget.style.borderColor = 'rgba(88, 166, 255, 0.3)';
+  }}
+  >
+    <span style={{ fontSize: '1.1rem' }}>📄</span>
+    <a 
+      href={file.url} 
+      download={file.name}
+      style={{
+        color: '#79c0ff',
+        textDecoration: 'none',
+        maxWidth: '150px',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        cursor: 'pointer'
+      }}
+      title={file.name}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') window.open(file.url);
+      }}
+    >
+      {file.name}
+    </a>
+    <button
+      onClick={() => onDelete(file.name, file.url)}
+      disabled={disabled}
+      style={{
+        background: 'none',
+        border: 'none',
+        color: '#f85149',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: '1rem',
+        padding: '0 4px',
+        display: 'flex',
+        alignItems: 'center',
+        opacity: disabled ? 0.5 : 0.7,
+        transition: 'opacity 0.2s',
+      }}
+      onMouseEnter={(e) => { e.target.style.opacity = '1'; }}
+      onMouseLeave={(e) => { e.target.style.opacity = '0.7'; }}
+      title="Delete file"
+      aria-label={`Delete ${file.name}`}
+    >
+      ✕
+    </button>
+  </div>
+);
+
 function NotepadComponent() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -94,6 +168,11 @@ function NotepadComponent() {
   const [userSessionId] = useState(uuidv4());
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [retryCount, setRetryCount] = useState(0);
+  // New state for attachments feature
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [codeCopyStatus, setCodeCopyStatus] = useState("📋");
 
   const textRef = useRef("");
   const isFocusedRef = useRef(false);
@@ -103,6 +182,8 @@ function NotepadComponent() {
   const copyStatusTimeoutRef = useRef(null);
   const editorRef = useRef(null);
   const retryTimeoutRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const codeCopyTimeoutRef = useRef(null);
 
   // Handle mobile responsiveness
   useEffect(() => {
@@ -225,6 +306,11 @@ function NotepadComponent() {
         textRef.current = incomingText;
         setSyncError("");
         setRetryCount(0);
+        
+        // Sync attachments from Firebase
+        const incomingAttachments = payload.attachments ?? [];
+        setAttachments(Array.isArray(incomingAttachments) ? incomingAttachments : []);
+        
         setIsLoading(false);
       },
       (error) => {
@@ -421,6 +507,110 @@ function NotepadComponent() {
     return "☁️ Saved";
   }, [syncError, isSyncing]);
 
+  // Handle code copy to clipboard
+  const handleCopyCode = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCodeCopyStatus("✅");
+      if (codeCopyTimeoutRef.current) clearTimeout(codeCopyTimeoutRef.current);
+      codeCopyTimeoutRef.current = setTimeout(() => setCodeCopyStatus("📋"), 2000);
+    } catch (error) {
+      console.error("Code copy failed", error);
+      setCodeCopyStatus("❌");
+      if (codeCopyTimeoutRef.current) clearTimeout(codeCopyTimeoutRef.current);
+      codeCopyTimeoutRef.current = setTimeout(() => setCodeCopyStatus("📋"), 2000);
+    }
+  }, [text]);
+
+  // Handle file attachment
+  const handleFileSelect = useCallback(async (event) => {
+    const files = Array.from(event.target.files || []);
+    
+    if (!id) {
+      alert("Please wait for note to load");
+      return;
+    }
+
+    // Safety check: Max 5 files per note
+    if (attachments.length + files.length > 5) {
+      alert("Maximum 5 files per note. Current: " + attachments.length);
+      return;
+    }
+
+    // Safety check: Max 5MB per file
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    const oversizedFiles = files.filter(f => f.size > MAX_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      alert(`File(s) too large: ${oversizedFiles.map(f => f.name).join(", ")} (max 5MB)`);
+      return;
+    }
+
+    setUploading(true);
+    const storage = getStorage();
+    const newAttachments = [...attachments];
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress(Math.round((i / files.length) * 100));
+
+        const filePath = `files/${id}/${file.name}`;
+        const fileRef = storageRef(storage, filePath);
+
+        await uploadBytes(fileRef, file);
+        const downloadURL = await getDownloadURL(fileRef);
+
+        newAttachments.push({
+          name: file.name,
+          url: downloadURL,
+          type: file.type,
+          size: file.size,
+          uploadedAt: Date.now()
+        });
+      }
+
+      // Save attachments to Realtime Database
+      await set(ref(database, `notes/${id}/attachments`), newAttachments);
+      setAttachments(newAttachments);
+      setUploadProgress(0);
+    } catch (error) {
+      console.error("Upload failed", error);
+      alert("Upload failed: " + error.message);
+      setUploadProgress(0);
+    } finally {
+      setUploading(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }, [id, attachments, database]);
+
+  // Handle file deletion
+  const handleDeleteFile = useCallback(async (fileName, url) => {
+    if (!id || !window.confirm(`Delete "${fileName}"?`)) return;
+
+    setUploading(true);
+    const storage = getStorage();
+
+    try {
+      // Delete from Storage
+      const fileRef = storageRef(storage, `files/${id}/${fileName}`);
+      await deleteObject(fileRef);
+
+      // Delete from Database
+      const updatedAttachments = attachments.filter(a => a.name !== fileName);
+      await set(ref(database, `notes/${id}/attachments`), updatedAttachments.length > 0 ? updatedAttachments : null);
+      
+      setAttachments(updatedAttachments);
+    } catch (error) {
+      console.error("Delete failed", error);
+      alert("Delete failed: " + error.message);
+    } finally {
+      setUploading(false);
+    }
+  }, [id, attachments, database]);
+
   // Loading state
   if (isLoading) {
     return (
@@ -514,7 +704,7 @@ function NotepadComponent() {
 
         {/* Premium Copy Button Section */}
         <div style={{ display: 'flex', alignItems: 'stretch', gap: isMobile ? '6px' : '12px', justifyContent: isMobile ? 'flex-start' : 'space-between', flexWrap: 'wrap' }}>
-          {/* HERO Copy Button */}
+          {/* HERO Copy Link Button */}
           <button
             onClick={handleCopyLink}
             aria-label="Copy note link to clipboard"
@@ -573,6 +763,103 @@ function NotepadComponent() {
 
           {/* Secondary Actions */}
           <div style={{ display: 'flex', gap: isMobile ? '4px' : '8px' }}>
+            {/* Copy Code Button */}
+            <button
+              onClick={handleCopyCode}
+              disabled={!text}
+              aria-label="Copy editor content to clipboard"
+              title="Copy editor content to clipboard"
+              style={{
+                padding: isMobile ? '10px 14px' : '12px 22px',
+                fontSize: isMobile ? '1rem' : '1.2rem',
+                fontWeight: 700,
+                border: '2px solid',
+                borderColor: codeCopyStatus === '✅' ? '#238636' : codeCopyStatus === '❌' ? '#f85149' : 'rgba(88, 166, 255, 0.3)',
+                borderRadius: '8px',
+                cursor: !text ? 'not-allowed' : 'pointer',
+                transition: 'all 0.3s ease',
+                backgroundColor: codeCopyStatus === '✅' ? 'rgba(35, 134, 54, 0.1)' : 'transparent',
+                color: codeCopyStatus === '✅' ? '#3fb950' : codeCopyStatus === '❌' ? '#f85149' : '#8b949e',
+                backdropFilter: 'blur(8px)',
+                opacity: !text ? 0.4 : 1,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              onMouseEnter={(e) => {
+                if (text && codeCopyStatus !== '✅' && codeCopyStatus !== '❌') {
+                  e.target.style.borderColor = '#58a6ff';
+                  e.target.style.backgroundColor = 'rgba(88, 166, 255, 0.1)';
+                  e.target.style.color = '#58a6ff';
+                  e.target.style.boxShadow = '0 4px 12px rgba(88, 166, 255, 0.2)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (text && codeCopyStatus !== '✅' && codeCopyStatus !== '❌') {
+                  e.target.style.borderColor = 'rgba(88, 166, 255, 0.3)';
+                  e.target.style.backgroundColor = 'transparent';
+                  e.target.style.color = '#8b949e';
+                  e.target.style.boxShadow = 'none';
+                }
+              }}
+            >
+              {codeCopyStatus}
+            </button>
+
+            {/* Attach Files Button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isReadOnly || uploading || attachments.length >= 5}
+              aria-label="Attach files to note"
+              title={attachments.length >= 5 ? "Maximum 5 files reached" : "Attach files to note"}
+              style={{
+                padding: isMobile ? '10px 14px' : '12px 22px',
+                fontSize: isMobile ? '0.8rem' : '0.9rem',
+                fontWeight: 700,
+                border: '2px solid',
+                borderColor: uploading ? 'rgba(88, 166, 255, 0.5)' : 'rgba(217, 119, 6, 0.3)',
+                borderRadius: '8px',
+                cursor: isReadOnly || uploading || attachments.length >= 5 ? 'not-allowed' : 'pointer',
+                transition: 'all 0.3s ease',
+                backgroundColor: uploading ? 'rgba(88, 166, 255, 0.1)' : 'transparent',
+                color: '#d9751b',
+                backdropFilter: 'blur(8px)',
+                opacity: isReadOnly || uploading || attachments.length >= 5 ? 0.4 : 1,
+                whiteSpace: 'nowrap'
+              }}
+              onMouseEnter={(e) => {
+                if (!isReadOnly && !uploading && attachments.length < 5) {
+                  e.target.style.borderColor = '#d9751b';
+                  e.target.style.backgroundColor = 'rgba(217, 119, 6, 0.15)';
+                  e.target.style.color = '#ffa657';
+                  e.target.style.boxShadow = '0 4px 12px rgba(217, 119, 6, 0.2)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isReadOnly && !uploading && attachments.length < 5) {
+                  e.target.style.borderColor = 'rgba(217, 119, 6, 0.3)';
+                  e.target.style.backgroundColor = 'transparent';
+                  e.target.style.color = '#d9751b';
+                  e.target.style.boxShadow = 'none';
+                }
+              }}
+            >
+              {uploading ? `⏳ ${uploadProgress}%` : '📎'}
+            </button>
+
+            {/* Hidden File Input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={handleFileSelect}
+              disabled={isReadOnly || uploading}
+              style={{ display: 'none' }}
+              aria-hidden="true"
+              accept="*/*"
+            />
+
             <button
               onClick={toggleReadOnly}
               aria-label={isReadOnly ? "Switch to edit mode" : "Switch to view mode"}
@@ -649,7 +936,25 @@ function NotepadComponent() {
         <div style={{ marginTop: isMobile ? '12px' : '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: isMobile ? '0.8rem' : '0.85rem', color: '#6e7681', gap: isMobile ? '10px' : '16px', flexWrap: 'wrap', paddingTop: isMobile ? '10px' : '12px', borderTop: '1px solid rgba(88, 166, 255, 0.08)' }}>
           <span style={{ fontWeight: 500 }}>📊 <span style={{ color: '#c9d1d9', fontWeight: 600 }}>{text.length.toLocaleString()}</span></span>
           <span style={{ fontWeight: 500 }}>🕐 {lastSavedAt ? lastSavedAt.toLocaleTimeString() : 'just now'}</span>
+          {attachments.length > 0 && <span style={{ fontWeight: 500, color: '#79c0ff' }}>📎 {attachments.length} file{attachments.length !== 1 ? 's' : ''}</span>}
         </div>
+
+        {/* File Attachments Section */}
+        {attachments.length > 0 && (
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(88, 166, 255, 0.08)' }}>
+            <p style={{ margin: '0 0 8px 0', fontSize: '0.8rem', color: '#6e7681', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>📂 Attachments</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+              {attachments.map((file) => (
+                <FileChip 
+                  key={file.name} 
+                  file={file} 
+                  onDelete={handleDeleteFile}
+                  disabled={uploading}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Error/Warning Messages with Animation */}
         {syncError && (
