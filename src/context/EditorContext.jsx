@@ -50,7 +50,7 @@ const initialState = {
   // ============================================
   // REAL-TIME COLLABORATION STATE
   // ============================================
-  presenceCount: null, // null = loading, 0 = solo, N = N users
+  presenceCount: 1, // Always at least 1 (current user)
   isTyping: false,
 
   // ============================================

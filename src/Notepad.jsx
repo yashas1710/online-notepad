@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
 import { useEditor } from './context/EditorContext';
 import useFirebaseSync from './hooks/useFirebaseSync';
 import { usePresence } from './hooks/usePresence';
 import Toolbar from './components/Toolbar';
-import EditorContainer from './components/EditorContainer';
 import Logger from './utils/logger';
 import { TIMINGS, STORAGE_KEYS } from './utils/constants';
 
@@ -82,22 +80,13 @@ function Notepad() {
     [dispatch]
   );
 
-  // Handle language selection
-  const handleLanguageChange = useCallback(
-    (language) => {
-      dispatch({ type: 'SET_LANGUAGE', payload: language });
-      Logger.debug('Language changed', { language });
-    },
-    [dispatch]
-  );
-
-  // Handle editor focus
-  const handleEditorFocus = useCallback(() => {
+  // Handle textarea focus
+  const handleTextareaFocus = useCallback(() => {
     dispatch({ type: 'SET_FOCUSED', payload: true });
   }, [dispatch]);
 
-  // Handle editor blur
-  const handleEditorBlur = useCallback(() => {
+  // Handle textarea blur
+  const handleTextareaBlur = useCallback(() => {
     dispatch({ type: 'SET_FOCUSED', payload: false });
   }, [dispatch]);
 
@@ -162,6 +151,20 @@ function Notepad() {
     dispatch({ type: 'SET_CODE_COPY_STATUS', payload: status });
   }, [dispatch]);
 
+  // Handle paste from clipboard
+  const handlePaste = useCallback(() => {
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        dispatch({ type: 'SET_TEXT', payload: text });
+        dispatch({ type: 'SET_TYPING', payload: true });
+        Logger.info('Content pasted from clipboard');
+      })
+      .catch((error) => {
+        Logger.error('Failed to paste from clipboard', { error });
+      });
+  }, [dispatch]);
+
   // Show loader until note ID exists and initial sync finishes
   if (!noteId || state.isLoading) {
     return (
@@ -181,44 +184,33 @@ function Notepad() {
     <div className="notepad-page">
       <Toolbar
         text={state.text}
-        language={state.language}
         isSyncing={state.isSyncing}
         syncError={state.syncError}
         isReadOnly={state.isReadOnly}
         copyStatus={state.copyStatus}
-        codeCopyStatus={state.codeCopyStatus}
         usersOnline={state.presenceCount ?? 0}
         lastSavedAt={state.lastSavedAt}
         isMobile={isMobile}
-        onLanguageChange={handleLanguageChange}
         onCopyLink={handleCopyLink}
         onCopyCode={handleCopyCode}
         onCopyStatusChange={handleCopyStatusChange}
         onCodeCopyStatusChange={handleCodeCopyStatusChange}
         onClearAll={handleClearAll}
         onToggleReadOnly={handleToggleReadOnly}
+        onPaste={handlePaste}
       />
 
-      <div className="notepad-editor-region">
-        <EditorContainer>
-          <Editor
-            height="100%"
-            language={state.language}
-            value={state.text}
-            onChange={handleEditorChange}
-            onFocus={handleEditorFocus}
-            onBlur={handleEditorBlur}
-            theme="vs-dark"
-            options={{
-              minimap: { enabled: !isMobile },
-              wordWrap: 'on',
-              fontSize: isMobile ? 12 : 14,
-              scrollBeyondLastLine: false,
-              readOnly: state.isReadOnly,
-              defaultLanguage: state.language,
-            }}
-          />
-        </EditorContainer>
+      <div className="simple-editor">
+        <textarea
+          className="simple-textarea"
+          value={state.text}
+          onChange={(e) => handleEditorChange(e.target.value)}
+          onFocus={handleTextareaFocus}
+          onBlur={handleTextareaBlur}
+          disabled={state.isReadOnly}
+          placeholder="Start typing... "
+          spellCheck="true"
+        />
       </div>
 
       {state.syncError && (

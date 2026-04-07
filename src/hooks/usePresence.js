@@ -15,6 +15,12 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
   const sessionIdRef = useRef(null);
   const unsubscribeRef = useRef(null);
   const isPermissionDeniedRef = useRef(false);
+  const setPresenceCountRef = useRef(setPresenceCount);
+
+  // Keep callback ref in sync but don't trigger re-initialization
+  useEffect(() => {
+    setPresenceCountRef.current = setPresenceCount;
+  }, [setPresenceCount])
 
   // Generate unique sessionId on first render (per tab/window)
   useEffect(() => {
@@ -39,7 +45,7 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
 
     // If rules have already denied presence in this session, avoid repeated writes/listens.
     if (isPermissionDeniedRef.current) {
-      setPresenceCount(1);
+      setPresenceCountRef.current(1);
       return;
     }
 
@@ -79,7 +85,7 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
         if (isPermissionDenied) {
           isPermissionDeniedRef.current = true;
           // Fall back to local-only presence instead of crashing the UI.
-          setPresenceCount(1);
+          setPresenceCountRef.current(1);
           Logger.warn('Presence disabled by Firebase rules (permission denied)');
           return;
         }
@@ -103,13 +109,23 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
         const presenceData = snapshot.val();
 
         if (!presenceData || Object.keys(presenceData).length === 0) {
-          setPresenceCount(0);
+          setPresenceCountRef.current(1); // At least the current user
           return;
         }
 
-        // Count unique UIDs (not sessions)
-        const uniqueUserIds = Object.keys(presenceData);
-        setPresenceCount(uniqueUserIds.length);
+        // Count unique UIDs that have at least one active session
+        const activeUserIds = Object.keys(presenceData).filter((userId) => {
+          const userSessions = presenceData[userId];
+          if (!userSessions || typeof userSessions !== 'object') return false;
+          
+          // Check if user has at least one active (non-null) session
+          const activeSessions = Object.values(userSessions).filter(
+            (session) => session !== null && session !== undefined
+          );
+          return activeSessions.length > 0;
+        });
+
+        setPresenceCountRef.current(Math.max(1, activeUserIds.length)); // Always at least 1
       },
       (error) => {
         const code = String(error?.code || '').toLowerCase();
@@ -119,7 +135,7 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
 
         if (isPermissionDenied) {
           isPermissionDeniedRef.current = true;
-          setPresenceCount(1);
+          setPresenceCountRef.current(1);
           Logger.warn('Presence listener blocked by Firebase rules (permission denied)');
           return;
         }
@@ -138,7 +154,7 @@ export const usePresence = (noteId, uid, setPresenceCount = () => {}) => {
         set(sessionRef, null).catch(() => {});
       }
     };
-  }, [noteId, uid, setPresenceCount]);
+  }, [noteId, uid]);
 
   // Return sessionId for other features (e.g., typing indicator)
   return {
